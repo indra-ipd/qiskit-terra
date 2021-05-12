@@ -150,15 +150,15 @@ class Optimizer(ABC):
                 todo_results.append(f(todo))
         else:
             i = 0
-            chunks = []
             # split all points to chunks, where each chunk has batch_size points
             while i < len(todos):
-                chunks.append(todos[i : i + max_evals_grouped])
-                i += max_evals_grouped
-            for chunk in chunks:  # eval the chunks in order
-                parallel_parameters = np.concatenate(chunk)
                 # eval the points in a chunk (order preserved)
-                todo_results.extend(f(parallel_parameters))
+                results = f(np.concatenate(todos[i : i + max_evals_grouped]))
+                if isinstance(results, float):
+                    todo_results.append(results)
+                else:
+                    todo_results.extend(results)
+                i += max_evals_grouped
 
         grad = []
         div = 2 * np.sin(epsilon)
