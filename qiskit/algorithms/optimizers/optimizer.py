@@ -119,6 +119,56 @@ class Optimizer(ABC):
 
         return np.array(grad)
 
+    # pylint: disable=invalid-name
+    @staticmethod
+    def gradient_param_shift(x_center, f, epsilon=np.pi / 2, max_evals_grouped=1):
+        """
+        We compute the gradient with the parameter shift in the parallel way,
+        around the point x_center.
+
+        Args:
+            x_center (ndarray): point around which we compute the gradient
+            f (func): the function of which the gradient is to be computed.
+            epsilon (float): the epsilon used in the parameter shift.
+            max_evals_grouped (int): max evals grouped
+        Returns:
+            grad: the gradient computed
+
+        """
+        epsilon = np.pi / 2
+        d = np.zeros((len(x_center),), float)
+        todos = []
+        for k in range(len(x_center)):
+            d[k] = epsilon
+            todos.append(x_center + d)
+            todos.append(x_center - d)
+            d[k] = 0.0
+
+        todo_results = []
+        if max_evals_grouped == 1:
+            for todo in todos:
+                todo_results.append(f(todo))
+        else:
+            i = 0
+            chunks = []
+            # split all points to chunks, where each chunk has batch_size points
+            while i < len(todos):
+                chunks.append(todos[i : i + max_evals_grouped])
+                i += max_evals_grouped
+            for chunk in chunks:  # eval the chunks in order
+                parallel_parameters = np.concatenate(chunk)
+                # eval the points in a chunk (order preserved)
+                todo_results.extend(f(parallel_parameters))
+
+        grad = []
+        div = 2 * np.sin(epsilon)
+        for i in range(0, len(todo_results), 2):
+            plus = todo_results[i]
+            minus = todo_results[i + 1]
+            grad.append((plus - minus) / div)
+
+        return np.array(grad)
+
     @staticmethod
     def wrap_function(function, args):
         """
