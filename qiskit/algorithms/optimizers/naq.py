@@ -57,8 +57,8 @@ class NAQ(SciPyOptimizer):
 
 # pylint: disable=invalid-name
 def naq(fun, x0, args=(), jac=None, callback=None, mu=0.9,global_conv=True,
-                  gtol=1e-5, norm=2, eps=1e-8, maxiter=None,
-                  disp=False, return_all=False, finite_diff_rel_step=None,
+                  gtol=1e-5, norm=2, eps=1e-8, maxiter=None, lineSearch='armijo',
+                  disp=False, return_all=False, finite_diff_rel_step=None,gamma = 1e-5,
                   **unknown_options):
     """
     Minimization of scalar function of one or more variables using the
@@ -88,6 +88,13 @@ def naq(fun, x0, args=(), jac=None, callback=None, mu=0.9,global_conv=True,
         possibly adjusted to fit into the bounds. For ``method='3-point'``
         the sign of `h` is ignored. If None (default) then step is selected
         automatically.
+    global_conv : bool , default True
+        include global convergence term
+    lineSearch : str , default: 'armijo', options : 'armijo','wolfe','explicit'
+        LineSearch strategies for determining step size
+    mu : float/str , options : float: 0 >= mu <1, str: 'adaptive'
+        momentum parameter
+    gamma : parameter used in adaptive mu, default : gamma = 1e-5
 
     """
     _check_unknown_options(unknown_options)
@@ -125,15 +132,21 @@ def naq(fun, x0, args=(), jac=None, callback=None, mu=0.9,global_conv=True,
     old_old_fval = old_fval + np.linalg.norm(gfk) / 2
 
     xk = x0
-    muVal = []
     if retall:
         allvecs = [x0]
     warnflag = 0
     gnorm = vecnorm(gfk, ord=norm)
-    theta_k = 1
-    gamma = 1e-5
+    if mu=='adaptive':
+        theta_k = 1
+    else:
+        muVal = mu
     while (gnorm > gtol) and (k < maxiter):
-        xmuv = xk + mu * vk
+        if mu == 'adaptive':
+            theta_kp1 = ((gamma - (theta_k * theta_k)) + np.sqrt(((gamma - (theta_k * theta_k)) * (gamma - (theta_k * theta_k))) + 4 * theta_k * theta_k)) / 2
+            muVal = np.minimum((theta_k * (1 - theta_k)) / (theta_k * theta_k + theta_kp1), 0.95)
+            theta_k = theta_kp1
+
+        xmuv = xk + muVal * vk
         if k > 0:
             gfk = myfprime(xmuv)
 
@@ -146,22 +159,50 @@ def naq(fun, x0, args=(), jac=None, callback=None, mu=0.9,global_conv=True,
             delta = 1e-4
 
         try:
-
-
-            # Armijo Line Search
-            alpha_k = 1
-            old_old_fval = f(xmuv)
-            warnflag = 2
-            while alpha_k > 1e-4:
-                old_fval = f(xmuv + alpha_k * pk)
-                RHS = old_old_fval + 1e-3 * alpha_k * np.dot(gfk.T, pk)
-                if old_fval <= RHS:
-                    warnflag=0
+            if lineSearch=='armijo':
+                # Armijo Line Search
+                alpha_k = 1
+                old_old_fval = f(xmuv)
+                warnflag = 2
+                while alpha_k > 1e-4:
+                    old_fval = f(xmuv + alpha_k * pk)
+                    RHS = old_old_fval + 1e-3 * alpha_k * np.dot(gfk.T, pk)
+                    if old_fval <= RHS:
+                        warnflag=0
+                        break
+                    else:
+                        alpha_k *= 0.5
+                if warnflag:
                     break
+
+            if lineSearch == 'wolfe':
+                old_old_fval = f(xmuv)
+                old_fval = f(xmuv + alpha_k * pk)
+
+                alpha_k, fc, gc, old_fval, old_old_fval, gfkp1 = \
+                    _line_search_wolfe12(f, myfprime, xmuv, pk, gfk,
+                                         old_fval, old_old_fval, amin=1e-100, amax=1e100)
+
+            if lineSearch == 'explicit':
+                LHS = f(xmuv + pk)
+                RHS = f(xmuv) + 1e-3 * numpy.dot(gfk.T, pk)
+                if LHS <= RHS:
+                    alpha_k = 1
                 else:
-                    alpha_k *= 0.5
-            if warnflag:
-                break
+                    # first iter
+                    if k == 0:
+                        L = 100
+                        old_old_fval = LHS + np.linalg.norm(gfk) / 2
+                        alpha_k, fc, gc, old_fval, old_old_fval, gfkp1 = \
+                            _line_search_wolfe12(f, myfprime, xmuv, pk, gfk,
+                                                 LHS, old_old_fval, amin=1e-100, amax=1e100)
+
+                    else:
+                        L = 100 * (vecnorm(yk, ord=norm) / vecnorm(sk, ord=norm))
+                        Qk = L * numpy.eye(N)
+                        pkQ = numpy.sqrt(numpy.dot(pk.T, numpy.dot(Qk, pk)))
+                        alpha_k = -(delta * numpy.dot(gfk.T, pk)) / numpy.square(pkQ)
+
 
         except _LineSearchError:
             # Line search failed to find a better solution.
@@ -169,11 +210,11 @@ def naq(fun, x0, args=(), jac=None, callback=None, mu=0.9,global_conv=True,
             break
 
 
-        vkp1 = mu * vk + alpha_k * pk
+        vkp1 = muVal * vk + alpha_k * pk
         xkp1 = xk + vkp1
         if retall:
             allvecs.append(xkp1)
-        sk = xkp1 - (xk + mu * vk)
+        sk = xkp1 - (xk + muVal * vk)
         xk = xkp1
         vk = vkp1
 
