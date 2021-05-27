@@ -104,7 +104,7 @@ def naq(fun, x0, args=(), jac=None, callback=None, mu=0.9,global_conv=True,
     if x0.ndim == 0:
         x0.shape = (1,)
     if maxiter is None:
-        maxiter = len(x0) * 200
+        maxiter = len(x0)
 
     sf = _prepare_scalar_function(fun, x0, jac, args=args, epsilon=eps,
                                   finite_diff_rel_step=finite_diff_rel_step)
