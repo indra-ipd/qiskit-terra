@@ -3,7 +3,7 @@ from typing import Optional
 import numpy as np
 from scipy.optimize import OptimizeResult
 from .scipy_optimizer import SciPyOptimizer
-from scipy.optimize.optimize import _prepare_scalar_function, _check_unknown_options, vecnorm, _status_message
+from scipy.optimize.optimize import _prepare_scalar_function, _check_unknown_options, vecnorm, _status_message,_line_search_wolfe12, _LineSearchError
 
 
 
@@ -14,7 +14,7 @@ class NAQ(SciPyOptimizer):
     See https://www.jstage.jst.go.jp/article/nolta/8/4/8_289/_pdf
     """
 
-    _OPTIONS = ["maxiter", "maxfev", "disp", "mu"]
+    _OPTIONS = ["maxiter", "maxfev", "disp", "mu","lineSearch","analytical_grad"]
 
     # pylint: disable=unused-argument
     def __init__(
@@ -23,6 +23,8 @@ class NAQ(SciPyOptimizer):
         maxfev: int = 1024,
         disp: bool = False,
         mu: float = 0.9,
+        lineSearch: str = 'armijo',
+        analytical_grad: bool = True,
         options: Optional[dict] = None,
         **kwargs,
     ) -> None:
@@ -59,7 +61,7 @@ class NAQ(SciPyOptimizer):
 def naq(fun, x0, args=(), jac=None, callback=None, mu=0.9,global_conv=True,
                   gtol=1e-5, norm=2, eps=1e-8, maxiter=None, lineSearch='armijo',
                   disp=False, return_all=False, finite_diff_rel_step=None,gamma = 1e-5,
-                  **unknown_options):
+                  analytical_grad=True, **unknown_options):
     """
     Minimization of scalar function of one or more variables using the
     NAQ algorithm.
@@ -110,7 +112,10 @@ def naq(fun, x0, args=(), jac=None, callback=None, mu=0.9,global_conv=True,
                                   finite_diff_rel_step=finite_diff_rel_step)
 
     f = sf.fun
-    myfprime = sf.grad
+    if analytical_grad:
+        myfprime = NAQ.wrap_function(NAQ.gradient_param_shift, (fun, 0, 500))
+    else:
+        myfprime = sf.grad
 
     old_fval = f(x0)
     gfk = myfprime(x0)
@@ -159,7 +164,10 @@ def naq(fun, x0, args=(), jac=None, callback=None, mu=0.9,global_conv=True,
             delta = 1e-4
 
         try:
-            if lineSearch=='armijo':
+            if type(lineSearch)!=str:
+                alpha_k=lineSearch
+
+            elif lineSearch=='armijo':
                 # Armijo Line Search
                 alpha_k = 1
                 old_old_fval = f(xmuv)
@@ -175,7 +183,8 @@ def naq(fun, x0, args=(), jac=None, callback=None, mu=0.9,global_conv=True,
                 if warnflag:
                     break
 
-            if lineSearch == 'wolfe':
+            elif lineSearch == 'wolfe':
+                alpha_k = 1
                 old_old_fval = f(xmuv)
                 old_fval = f(xmuv + alpha_k * pk)
 
@@ -183,9 +192,9 @@ def naq(fun, x0, args=(), jac=None, callback=None, mu=0.9,global_conv=True,
                     _line_search_wolfe12(f, myfprime, xmuv, pk, gfk,
                                          old_fval, old_old_fval, amin=1e-100, amax=1e100)
 
-            if lineSearch == 'explicit':
+            elif lineSearch == 'explicit':
                 LHS = f(xmuv + pk)
-                RHS = f(xmuv) + 1e-3 * numpy.dot(gfk.T, pk)
+                RHS = f(xmuv) + 1e-3 * np.dot(gfk.T, pk)
                 if LHS <= RHS:
                     alpha_k = 1
                 else:
@@ -199,9 +208,9 @@ def naq(fun, x0, args=(), jac=None, callback=None, mu=0.9,global_conv=True,
 
                     else:
                         L = 100 * (vecnorm(yk, ord=norm) / vecnorm(sk, ord=norm))
-                        Qk = L * numpy.eye(N)
-                        pkQ = numpy.sqrt(numpy.dot(pk.T, numpy.dot(Qk, pk)))
-                        alpha_k = -(delta * numpy.dot(gfk.T, pk)) / numpy.square(pkQ)
+                        Qk = L * np.eye(N)
+                        pkQ = np.sqrt(np.dot(pk.T, np.dot(Qk, pk)))
+                        alpha_k = -(delta * np.dot(gfk.T, pk)) / np.square(pkQ)
 
 
         except _LineSearchError:
