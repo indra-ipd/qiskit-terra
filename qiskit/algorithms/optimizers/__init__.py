@@ -54,6 +54,7 @@ Local Optimizers
    NELDER_MEAD
    NFT
    NAQ
+   aSNAQ
    P_BFGS
    POWELL
    SLSQP
@@ -112,6 +113,7 @@ from .l_bfgs_b import L_BFGS_B
 from .nelder_mead import NELDER_MEAD
 from .nft import NFT
 from .naq import NAQ
+from .asnaq import aSNAQ
 from .nlopts.crs import CRS
 from .nlopts.direct_l import DIRECT_L
 from .nlopts.direct_l_rand import DIRECT_L_RAND
@@ -140,6 +142,7 @@ __all__ = [
     "NELDER_MEAD",
     "NFT",
     "NAQ",
+    "aSNAQ",
     "P_BFGS",
     "POWELL",
     "SciPyOptimizer",

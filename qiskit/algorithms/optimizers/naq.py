@@ -1,10 +1,17 @@
 from typing import Optional
 
 import numpy as np
+from numpy import Inf
 from scipy.optimize import OptimizeResult
 from .scipy_optimizer import SciPyOptimizer
-from scipy.optimize.optimize import _prepare_scalar_function, _check_unknown_options, vecnorm, _status_message,_line_search_wolfe12, _LineSearchError
-
+from scipy.optimize.optimize import (
+    _prepare_scalar_function,
+    #_check_unknown_options,
+    #vecnorm,
+    _status_message,
+    _line_search_wolfe12,
+    _LineSearchError,
+)
 
 
 class NAQ(SciPyOptimizer):
@@ -14,7 +21,7 @@ class NAQ(SciPyOptimizer):
     See https://www.jstage.jst.go.jp/article/nolta/8/4/8_289/_pdf
     """
 
-    _OPTIONS = ["maxiter", "maxfev", "disp", "mu","lineSearch","analytical_grad"]
+    _OPTIONS = ["maxiter", "maxfev", "disp", "mu", "lineSearch", "analytical_grad","reduce_fev"]
 
     # pylint: disable=unused-argument
     def __init__(
@@ -23,8 +30,9 @@ class NAQ(SciPyOptimizer):
         maxfev: int = 1024,
         disp: bool = False,
         mu: float = 0.9,
-        lineSearch: str = 'armijo',
+        lineSearch: str = "armijo",
         analytical_grad: bool = True,
+        reduce_fev: bool = False,
         options: Optional[dict] = None,
         **kwargs,
     ) -> None:
@@ -56,12 +64,36 @@ class NAQ(SciPyOptimizer):
                 options[k] = v
         super().__init__(method=naq, options=options, **kwargs)
 
+def vecnorm(x, ord=2):
+    if ord == Inf:
+        return np.amax(np.abs(x))
+    elif ord == -Inf:
+        return np.amin(np.abs(x))
+    else:
+        return np.sum(np.abs(x) ** ord, axis=0) ** (1.0 / ord)
 
 # pylint: disable=invalid-name
-def naq(fun, x0, args=(), jac=None, callback=None, mu=0.9,global_conv=True,
-                  gtol=1e-5, norm=2, eps=1e-8, maxiter=None, lineSearch='armijo',
-                  disp=False, return_all=False, finite_diff_rel_step=None,gamma = 1e-5,
-                  analytical_grad=True, **unknown_options):
+def naq(
+    fun,
+    x0,
+    args=(),
+    jac=None,
+    callback=None,
+    mu=0.9,
+    global_conv=True,
+    gtol=1e-5,
+    norm=Inf,
+    eps=1e-8,
+    maxiter=None,
+    lineSearch="armijo",
+    reduce_fev = False,
+    disp=False,
+    return_all=False,
+    finite_diff_rel_step=None,
+    gamma=1e-5,
+    analytical_grad=False,
+    **unknown_options,
+):
     """
     Minimization of scalar function of one or more variables using the
     NAQ algorithm.
@@ -97,9 +129,10 @@ def naq(fun, x0, args=(), jac=None, callback=None, mu=0.9,global_conv=True,
     mu : float/str , options : float: 0 >= mu <1, str: 'adaptive'
         momentum parameter
     gamma : parameter used in adaptive mu, default : gamma = 1e-5
+    reduce_fev : bool, default: False, if True uses MoQ implementation to reduce the number of function evaluations
 
     """
-    _check_unknown_options(unknown_options)
+    #_check_unknown_options(unknown_options)
     retall = return_all
 
     x0 = np.asarray(x0).flatten()
@@ -108,25 +141,40 @@ def naq(fun, x0, args=(), jac=None, callback=None, mu=0.9,global_conv=True,
     if maxiter is None:
         maxiter = len(x0)
 
-    sf = _prepare_scalar_function(fun, x0, jac, args=args, epsilon=eps,
-                                  finite_diff_rel_step=finite_diff_rel_step)
 
-    f = sf.fun
     if analytical_grad:
+        f = fun
         myfprime = NAQ.wrap_function(NAQ.gradient_param_shift, (fun, 0, 500))
+        sf = _prepare_scalar_function(
+            f, x0, myfprime, args=args, epsilon=eps, finite_diff_rel_step=finite_diff_rel_step
+         )
+        f = sf.fun
+        myfprime = sf.grad
     else:
+        jac = NAQ.wrap_function(NAQ.gradient_num_diff,(fun, eps, 500))#sf.grad
+
+        #sf = _prepare_scalar_function(
+        #    fun, x0, myfprime, args=args, epsilon=eps, finite_diff_rel_step=finite_diff_rel_step
+        #)
+        sf = _prepare_scalar_function(
+            fun, x0, jac, args=args, epsilon=eps, finite_diff_rel_step=finite_diff_rel_step
+        )
+        f = sf.fun
         myfprime = sf.grad
 
     old_fval = f(x0)
     gfk = myfprime(x0)
+    if reduce_fev:
+        curr_grad = np.copy(gfk)
+        prev_grad = np.copy(gfk)
     err = []
     if not np.isscalar(old_fval):
         try:
             old_fval = old_fval.item()
         except (ValueError, AttributeError) as e:
-            raise ValueError("The user-provided "
-                             "objective function must "
-                             "return a scalar value.") from e
+            raise ValueError(
+                "The user-provided " "objective function must " "return a scalar value."
+            ) from e
 
     k = 0
     N = len(x0)
@@ -141,19 +189,28 @@ def naq(fun, x0, args=(), jac=None, callback=None, mu=0.9,global_conv=True,
         allvecs = [x0]
     warnflag = 0
     gnorm = vecnorm(gfk, ord=norm)
-    if mu=='adaptive':
+    if mu == "adaptive":
         theta_k = 1
     else:
         muVal = mu
     while (gnorm > gtol) and (k < maxiter):
-        if mu == 'adaptive':
-            theta_kp1 = ((gamma - (theta_k * theta_k)) + np.sqrt(((gamma - (theta_k * theta_k)) * (gamma - (theta_k * theta_k))) + 4 * theta_k * theta_k)) / 2
+        if mu == "adaptive":
+            theta_kp1 = (
+                (gamma - (theta_k * theta_k))
+                + np.sqrt(
+                    ((gamma - (theta_k * theta_k)) * (gamma - (theta_k * theta_k)))
+                    + 4 * theta_k * theta_k
+                )
+            ) / 2
             muVal = np.minimum((theta_k * (1 - theta_k)) / (theta_k * theta_k + theta_kp1), 0.95)
             theta_k = theta_kp1
 
         xmuv = xk + muVal * vk
         if k > 0:
-            gfk = myfprime(xmuv)
+            if reduce_fev:
+                gfk = (1 + muVal) * curr_grad - muVal * prev_grad
+            else:
+                gfk = myfprime(xmuv)
 
         pk = -np.dot(Hk, gfk)
 
@@ -164,10 +221,10 @@ def naq(fun, x0, args=(), jac=None, callback=None, mu=0.9,global_conv=True,
             delta = 1e-4
 
         try:
-            if type(lineSearch)!=str:
-                alpha_k=lineSearch
+            if type(lineSearch) != str:
+                alpha_k = lineSearch
 
-            elif lineSearch=='armijo':
+            elif lineSearch == "armijo":
                 # Armijo Line Search
                 alpha_k = 1
                 old_old_fval = f(xmuv)
@@ -176,23 +233,23 @@ def naq(fun, x0, args=(), jac=None, callback=None, mu=0.9,global_conv=True,
                     old_fval = f(xmuv + alpha_k * pk)
                     RHS = old_old_fval + 1e-3 * alpha_k * np.dot(gfk.T, pk)
                     if old_fval <= RHS:
-                        warnflag=0
+                        warnflag = 0
                         break
                     else:
                         alpha_k *= 0.5
                 if warnflag:
                     break
 
-            elif lineSearch == 'wolfe':
+            elif lineSearch == "wolfe":
                 alpha_k = 1
                 old_old_fval = f(xmuv)
                 old_fval = f(xmuv + alpha_k * pk)
 
-                alpha_k, fc, gc, old_fval, old_old_fval, gfkp1 = \
-                    _line_search_wolfe12(f, myfprime, xmuv, pk, gfk,
-                                         old_fval, old_old_fval, amin=1e-100, amax=1e100)
+                alpha_k, fc, gc, old_fval, old_old_fval, gfkp1 = _line_search_wolfe12(
+                    f, myfprime, xmuv, pk, gfk, old_fval, old_old_fval, amin=1e-100, amax=1e100
+                )
 
-            elif lineSearch == 'explicit':
+            elif lineSearch == "explicit":
                 LHS = f(xmuv + pk)
                 RHS = f(xmuv) + 1e-3 * np.dot(gfk.T, pk)
                 if LHS <= RHS:
@@ -202,9 +259,9 @@ def naq(fun, x0, args=(), jac=None, callback=None, mu=0.9,global_conv=True,
                     if k == 0:
                         L = 100
                         old_old_fval = LHS + np.linalg.norm(gfk) / 2
-                        alpha_k, fc, gc, old_fval, old_old_fval, gfkp1 = \
-                            _line_search_wolfe12(f, myfprime, xmuv, pk, gfk,
-                                                 LHS, old_old_fval, amin=1e-100, amax=1e100)
+                        alpha_k, fc, gc, old_fval, old_old_fval, gfkp1 = _line_search_wolfe12(
+                            f, myfprime, xmuv, pk, gfk, LHS, old_old_fval, amin=1e-100, amax=1e100
+                        )
 
                     else:
                         L = 100 * (vecnorm(yk, ord=norm) / vecnorm(sk, ord=norm))
@@ -212,12 +269,10 @@ def naq(fun, x0, args=(), jac=None, callback=None, mu=0.9,global_conv=True,
                         pkQ = np.sqrt(np.dot(pk.T, np.dot(Qk, pk)))
                         alpha_k = -(delta * np.dot(gfk.T, pk)) / np.square(pkQ)
 
-
         except _LineSearchError:
             # Line search failed to find a better solution.
             warnflag = 2
             break
-
 
         vkp1 = muVal * vk + alpha_k * pk
         xkp1 = xk + vkp1
@@ -227,13 +282,15 @@ def naq(fun, x0, args=(), jac=None, callback=None, mu=0.9,global_conv=True,
         xk = xkp1
         vk = vkp1
 
-
         gfkp1 = myfprime(xkp1)
+        if reduce_fev:
+            prev_grad = np.copy(curr_grad)
+            curr_grad = np.copy(gfkp1)
 
         yk = gfkp1 - gfk
         gfk = gfkp1
 
-        #global convergence
+        # global convergence
         if global_conv:
             p_times_q = np.dot(sk.T, yk)
             if gnorm > 1e-2:
@@ -250,9 +307,10 @@ def naq(fun, x0, args=(), jac=None, callback=None, mu=0.9,global_conv=True,
 
         if callback is not None:
             callback(xk)
+
         k += 1
         gnorm = vecnorm(gfk, ord=norm)
-        if (gnorm <= gtol):
+        if gnorm <= gtol:
             break
 
         if not np.isfinite(old_fval):
@@ -263,30 +321,29 @@ def naq(fun, x0, args=(), jac=None, callback=None, mu=0.9,global_conv=True,
 
         rhok_inv = np.dot(yk, sk)
         # this was handled in numeric, let it remaines for more safety
-        if rhok_inv == 0.:
+        if rhok_inv == 0.0:
             rhok = 1000.0
             if disp:
                 print("Divide-by-zero encountered: rhok assumed large")
         else:
-            rhok = 1. / rhok_inv
+            rhok = 1.0 / rhok_inv
 
         A1 = I - sk[:, np.newaxis] * yk[np.newaxis, :] * rhok
         A2 = I - yk[:, np.newaxis] * sk[np.newaxis, :] * rhok
-        Hk = np.dot(A1, np.dot(Hk, A2)) + (rhok * sk[:, np.newaxis] *
-                                           sk[np.newaxis, :])
+        Hk = np.dot(A1, np.dot(Hk, A2)) + (rhok * sk[:, np.newaxis] * sk[np.newaxis, :])
 
     fval = old_fval
 
     if warnflag == 2:
-        msg = _status_message['pr_loss']
+        msg = _status_message["pr_loss"]
     elif k >= maxiter:
         warnflag = 1
-        msg = _status_message['maxiter']
+        msg = _status_message["maxiter"]
     elif np.isnan(gnorm) or np.isnan(fval) or np.isnan(xk).any():
         warnflag = 3
-        msg = _status_message['nan']
+        msg = _status_message["nan"]
     else:
-        msg = _status_message['success']
+        msg = _status_message["success"]
 
     if disp:
         print("%s%s" % ("Warning: " if warnflag != 0 else "", msg))
@@ -295,10 +352,18 @@ def naq(fun, x0, args=(), jac=None, callback=None, mu=0.9,global_conv=True,
         print("         Function evaluations: %d" % sf.nfev)
         print("         Gradient evaluations: %d" % sf.ngev)
 
-    result = OptimizeResult(fun=fval, jac=gfk, hess_inv=Hk, nfev=sf.nfev,
-                            njev=sf.ngev, status=warnflag,
-                            success=(warnflag == 0), message=msg, x=xk,
-                            nit=k)
+    result = OptimizeResult(
+        fun=fval,
+        jac=gfk,
+        hess_inv=Hk,
+        nfev=sf.nfev,
+        njev=sf.ngev,
+        status=warnflag,
+        success=(warnflag == 0),
+        message=msg,
+        x=xk,
+        nit=k,
+    )
     if retall:
-        result['allvecs'] = allvecs
+        result["allvecs"] = allvecs
     return result
