@@ -13,13 +13,14 @@
 """Analytical Quantum Gradient Descent (AQGD) optimizer."""
 
 import logging
-from typing import Callable, Tuple, List, Dict, Union
+from typing import Callable, Tuple, List, Dict, Union, Optional
 
 import numpy as np
 from qiskit.utils.validation import validate_range_exclusive_max
 from .optimizer import Optimizer, OptimizerSupportLevel
 from ..exceptions import AlgorithmError
 
+CALLBACK = Callable[[int, np.ndarray, float, float], None]
 logger = logging.getLogger(__name__)
 
 
@@ -54,6 +55,7 @@ class AQGD(Optimizer):
         momentum: Union[float, List[float]] = 0.25,
         param_tol: float = 1e-6,
         averaging: int = 10,
+        callback: Optional[CALLBACK] = None,
     ) -> None:
         """
         Performs Analytical Quantum Gradient Descent (AQGD) with Epochs.
@@ -95,7 +97,7 @@ class AQGD(Optimizer):
         self._param_tol = param_tol
         self._tol = tol
         self._averaging = averaging
-
+        self.callback = callback
         # state
         self._avg_objval = None
         self._prev_param = None
@@ -328,6 +330,8 @@ class AQGD(Optimizer):
                     objval = objective_function(params)
                     gradient = gradient_function(params)
 
+                if self.callback is not None:
+                    self.callback(self._eval_count, params, objval, self._eval_count)
                 logger.info(
                     " Iter: %4d | Obj: %11.6f | Grad Norm: %f",
                     iter_count,
@@ -342,8 +346,13 @@ class AQGD(Optimizer):
 
                 # Update parameters and momentum
                 params, momentum = self._update(params, gradient, momentum, eta, mom_coeff)
+
             # end inner iteration
+
+
             # if converged, end iterating over epochs
+            if self.callback is not None:
+                self.callback(self._eval_count, params, objval, self._eval_count)
             if converged:
                 break
             epoch += 1

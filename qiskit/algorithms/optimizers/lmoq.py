@@ -16,14 +16,14 @@ from scipy.optimize.optimize import (
 )
 
 
-class NAQ(SciPyOptimizer):
+class LMOQ(SciPyOptimizer):
     """
-    NAQ
+    L-MoQ
 
     See https://www.jstage.jst.go.jp/article/nolta/8/4/8_289/_pdf
     """
 
-    _OPTIONS = ["maxiter", "maxfev", "disp", "mu", "lineSearch", "analytical_grad","reduce_fev", "dirNorm"]
+    _OPTIONS = ["maxiter", "maxfev", "disp", "mu", "lineSearch", "analytical_grad","reduce_fev"]
 
     # pylint: disable=unused-argument
     def __init__(
@@ -35,7 +35,6 @@ class NAQ(SciPyOptimizer):
         lineSearch: str = "armijo",
         analytical_grad: bool = True,
         reduce_fev: bool = False,
-        dirNorm: bool = False,
         options: Optional[dict] = None,
         **kwargs,
     ) -> None:
@@ -65,7 +64,7 @@ class NAQ(SciPyOptimizer):
         for k, v in list(locals().items()):
             if k in self._OPTIONS:
                 options[k] = v
-        super().__init__(method=naq, options=options, **kwargs)
+        super().__init__(method=lmoq, options=options, **kwargs)
 
 def vecnorm(x, ord=2):
     if ord == Inf:
@@ -76,13 +75,14 @@ def vecnorm(x, ord=2):
         return np.sum(np.abs(x) ** ord, axis=0) ** (1.0 / ord)
 
 # pylint: disable=invalid-name
-def naq(
+def lmoq(
     fun,
     x0,
     args=(),
     jac=None,
     callback=None,
     mu=0.9,
+    m = 10,
     global_conv=True,
     gtol=1e-5,
     norm=Inf,
@@ -90,17 +90,17 @@ def naq(
     maxiter=None,
     lineSearch="armijo",
     reduce_fev = False,
+    dirNorm = False,
     disp=False,
     return_all=False,
     finite_diff_rel_step=None,
     gamma=1e-5,
-    dirNorm = False,
     analytical_grad=False,
     **unknown_options,
 ):
     """
     Minimization of scalar function of one or more variables using the
-    NAQ algorithm.
+    L-MoQ algorithm.
 
     Options
     -------
@@ -145,6 +145,9 @@ def naq(
     if maxiter is None:
         maxiter = len(x0)
 
+    import collections
+    sk_vec = collections.deque(maxlen=m)
+    yk_vec = collections.deque(maxlen=m)
 
     if analytical_grad:
         f = fun
@@ -227,7 +230,28 @@ def naq(
             else:
                 gfk = myfprime(xmuv)
 
-        pk = -np.dot(Hk, gfk)
+        #pk = -np.dot(Hk, gfk)
+        pk = -gfk
+        a = []
+        idx = min(k, m)
+        for i in range(min(k, m)):
+            a.append(np.dot(sk_vec[idx - 1 - i].T, pk) / np.dot(sk_vec[idx - 1 - i].T, yk_vec[idx - 1 - i]))
+            pk = pk - a[i] * yk_vec[idx - 1 - i]
+        if k > 0:
+            term = 0
+            for i in range(min(k, m)):
+                term = term + (np.dot(sk_vec[idx - 1 - i].T, yk_vec[idx - 1 - i]) / np.dot(yk_vec[idx - 1 - i].T,
+                                                                                                 yk_vec[idx - 1 - i]))
+            pk = pk * term / idx
+        else:
+            pk = 1e-10 * pk
+        for i in reversed(range(min(k, m))):
+            b = np.dot(yk_vec[idx - 1 - i].T, pk) / np.dot(yk_vec[idx - 1 - i].T, sk_vec[idx - 1 - i])
+            pk = pk + (a[i] - b) * sk_vec[idx - 1 - i]
+
+        if dirNorm == True:
+            pk = pk / vecnorm(pk, 2)  # direction normalization
+
 
         pknorm = vecnorm(pk, ord=norm)
         if pknorm > 1000:
@@ -289,9 +313,6 @@ def naq(
             warnflag = 2
             break
 
-        if dirNorm:
-            pk = pk/vecnorm(pk,ord=norm)
-
         vkp1 = muVal * vk + alpha_k * pk
         xkp1 = xk + vkp1
         if retall:
@@ -307,6 +328,8 @@ def naq(
 
         yk = gfkp1 - gfk
         gfk = gfkp1
+
+
 
         # global convergence
         if global_conv:
@@ -326,6 +349,8 @@ def naq(
         if callback is not None:
             callback(xk)
 
+        sk_vec.append(sk)
+        yk_vec.append(yk)
         k += 1
         gnorm = vecnorm(gfk, ord=norm)
         if gnorm <= gtol:

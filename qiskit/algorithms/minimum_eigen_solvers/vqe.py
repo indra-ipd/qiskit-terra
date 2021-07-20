@@ -460,6 +460,59 @@ class VQE(VariationalAlgorithm, MinimumEigensolver):
         self._ret.cost_function_evals = self._eval_count
 
         return self._ret
+    
+    def _energy_var_evaluation(
+        self, parameters: Union[List[float], np.ndarray]
+    ) -> Union[float, List[float]]:
+        """Evaluate energy at given parameters for the ansatz.
+
+        This is the objective function to be passed to the optimizer that is used for evaluation.
+
+        Args:
+            parameters: The parameters for the ansatz.
+
+        Returns:
+            Energy of the hamiltonian of each parameter.
+
+
+        Raises:
+            RuntimeError: If the ansatz has no parameters.
+        """
+        num_parameters = self.ansatz.num_parameters
+        if self._ansatz.num_parameters == 0:
+            raise RuntimeError("The ansatz cannot have 0 parameters.")
+
+        parameter_sets = np.reshape(parameters, (-1, num_parameters))
+        # Create dict associating each parameter with the lists of parameterization values for it
+        param_bindings = dict(
+            zip(self._ansatz_params, parameter_sets.transpose().tolist())
+        )  # type: Dict
+
+        start_time = time()
+        sampled_expect_op = self._circuit_sampler.convert(self._expect_op, params=param_bindings)
+        means = np.real(sampled_expect_op.eval())
+        variance = np.real(self._expectation.compute_variance(sampled_expect_op))
+        estimator_error = np.sqrt(variance / self.quantum_instance.run_config.shots)
+
+        if self._callback is not None:
+            variance = np.real(self._expectation.compute_variance(sampled_expect_op))
+            estimator_error = np.sqrt(variance / self.quantum_instance.run_config.shots)
+            for i, param_set in enumerate(parameter_sets):
+                self._eval_count += 1
+                self._callback(self._eval_count, param_set, means[i], estimator_error[i])
+        else:
+            self._eval_count += len(means)
+
+        end_time = time()
+        logger.info(
+            "Energy evaluation returned %s - %.5f (ms), eval count: %s",
+            means,
+            (end_time - start_time) * 1000,
+            self._eval_count,
+        )
+
+        return (means,estimator_error) if len(means) > 1 else (means[0],estimator_error[0])
+
 
     def _energy_evaluation(
         self, parameters: Union[List[float], np.ndarray]

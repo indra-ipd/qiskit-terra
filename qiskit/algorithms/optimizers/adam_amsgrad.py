@@ -19,7 +19,7 @@ import csv
 import numpy as np
 from qiskit.utils import algorithm_globals
 from .optimizer import Optimizer, OptimizerSupportLevel
-
+CALLBACK = Callable[[int, np.ndarray, float, float], None]
 # pylint: disable=invalid-name
 
 
@@ -68,6 +68,7 @@ class ADAM(Optimizer):
         eps: float = 1e-10,
         amsgrad: bool = False,
         snapshot_dir: Optional[str] = None,
+            callback: Optional[CALLBACK] = None,
     ) -> None:
         """
         Args:
@@ -96,6 +97,7 @@ class ADAM(Optimizer):
         self._noise_factor = noise_factor
         self._eps = eps
         self._amsgrad = amsgrad
+        self.callback = callback
 
         # runtime variables
         self._t = 0  # time steps
@@ -216,6 +218,10 @@ class ADAM(Optimizer):
 
             if self._snapshot_dir:
                 self.save_params(self._snapshot_dir)
+
+            if self.callback is not None:
+                self.callback(self._t, params_new, objective_function(params_new),self._t)
+
             if np.linalg.norm(params - params_new) < self._tol:
                 return params_new, objective_function(params_new), self._t
             else:

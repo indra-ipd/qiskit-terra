@@ -157,6 +157,7 @@ class GradientDescent(Optimizer):
             update = grad(x)
             nfevs += 1
 
+            update = update / np.sum(np.abs(update) ** 2, axis=0) ** (1.0 / 2)
             # compute next parameter value
             x_next = x - next(eta) * update
 

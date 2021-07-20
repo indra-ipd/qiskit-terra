@@ -204,12 +204,21 @@ def asnaq(
 
 
     func_calls, f = wrap_function(f, args)
+
+
     if fprime is None:
         #grad_calls, myfprime = wrap_function(approx_fprime, (f, epsilon))
         myfprime = aSNAQ.wrap_function(aSNAQ.gradient_param_shift, (fun, 0, 500))
+        sf = _prepare_scalar_function(
+            f, x0, myfprime, args=args, epsilon=eps, finite_diff_rel_step=finite_diff_rel_step
+        )
     else:
         grad_calls, myfprime = wrap_function(fprime, args)
     gnorm = 1
+
+    sf = _prepare_scalar_function(
+        f, x0, myfprime, args=args, epsilon=eps, finite_diff_rel_step=finite_diff_rel_step
+    )
     while (k<maxiter) and  (gnorm > gtol):
         gfk = myfprime(wk + mu * vk)
 
@@ -306,7 +315,7 @@ def asnaq(
             callback(wk)
         fval = f(wk)
         xk = wk
-        print(fval, mu)
+        #print(fval, mu)
         k += 1
         """
         iter.append(k)
